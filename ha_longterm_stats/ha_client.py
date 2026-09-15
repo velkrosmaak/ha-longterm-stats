@@ -6,6 +6,7 @@ from typing import Optional, Callable, Dict, Any
 import websockets
 from ha_longterm_stats.db import Database
 
+
 logger = logging.getLogger("ha_longterm_stats.ha_client")
 
 class HomeAssistantClient:

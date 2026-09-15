@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
 class AppConfig(BaseModel):
     ha_url: str = Field(default="http://homeassistant.local:8123")
     ha_token: str = Field(default="")

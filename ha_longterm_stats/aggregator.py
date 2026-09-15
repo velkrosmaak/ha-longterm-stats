@@ -11,6 +11,7 @@ class RollupAggregator:
         self.prune_raw_days = prune_raw_days
         self._running = False
 
+
     async def start(self):
         self._running = True
         logger.info(f"Starting background rollup aggregator task (runs every {self.interval_seconds // 60} minutes)...")

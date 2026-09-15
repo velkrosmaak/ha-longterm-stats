@@ -4,6 +4,7 @@ import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
+
 class Database:
     def __init__(self, db_path: str):
         self.db_path = db_path

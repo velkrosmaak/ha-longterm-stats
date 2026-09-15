@@ -8,6 +8,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+
 from ha_longterm_stats.config import config
 from ha_longterm_stats.db import Database
 from ha_longterm_stats.ha_client import HomeAssistantClient
