@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Home Assistant Long-Term Stats</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            500: '#0284c7',
+                            600: '#0369a1',
+                            700: '#075985',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Apache ECharts CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <style>
+        .glass {
+            background: rgba(15, 23, 42, 0.75);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        /* Custom scrollbars */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased selection:bg-sky-500 selection:text-white">
+
+    <!-- Top Navigation Header -->
+    <header class="glass sticky top-0 z-50 px-6 py-4 flex flex-wrap items-center justify-between border-b border-slate-800 gap-4">
+        <div class="flex items-center space-x-3">
+            <div class="p-2 bg-sky-500/10 text-sky-400 rounded-xl border border-sky-500/20 shadow-lg shadow-sky-500/5">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                </svg>
+            </div>
+            <div>
+                <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+                    HA Long-Term Stats
+                    <span class="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-mono">v0.1.0</span>
+                </h1>
+                <p class="text-xs text-slate-400">Home Assistant Long-Term Analytics & Visualization</p>
+            </div>
+        </div>
+
+        <!-- Status Badges & Action Buttons -->
+        <div class="flex items-center flex-wrap gap-3 text-xs">
+            <div id="ha-status-badge" class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800">
+                <span class="w-2.5 h-2.5 rounded-full bg-yellow-500 animate-pulse"></span>
+                <span class="text-slate-300 font-medium">Connecting...</span>
+            </div>
+
+            <div class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800 text-slate-400 font-mono">
+                <span id="db-records-badge">0 Records</span>
+                <span>•</span>
+                <span id="db-size-badge">0 MB</span>
+            </div>
+
+            <button onclick="triggerRollup()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition flex items-center gap-1.5 font-medium active:scale-95">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                </svg>
+                Sync Rollups
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <div class="flex-1 flex flex-col md:flex-row overflow-hidden">
+
+        <!-- Left Sidebar: Sensor Explorer & Filters -->
+        <aside class="w-full md:w-80 border-r border-slate-800/80 bg-slate-900/50 flex flex-col shrink-0">
+            <!-- Search & Device Class Filter -->
+            <div class="p-4 border-b border-slate-800 space-y-3">
+                <div class="flex items-center gap-2">
+                    <div class="relative flex-1">
+                        <svg class="w-4 h-4 absolute left-3 top-3 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                        </svg>
+                        <input type="text" id="sensor-search" placeholder="Search sensors..." 
+                               class="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition">
+                    </div>
+                    <select id="sensor-sort" onchange="setSort(this.value)" class="bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-xs text-slate-300 focus:outline-none focus:border-sky-500 cursor-pointer shrink-0 font-medium" title="Sort Sensors">
+                        <option value="name">Sort: Name</option>
+                        <option value="last_updated_desc">Sort: Newest</option>
+                        <option value="last_updated_asc">Sort: Oldest</option>
+                    </select>
+                </div>
+
+
+                <!-- Category Pills -->
+                <div class="flex items-center gap-1 overflow-x-auto pb-1 text-xs no-scrollbar" id="category-pills">
+                    <button onclick="setCategory(null)" class="category-pill active px-2.5 py-1 rounded-md bg-sky-500/20 text-sky-400 border border-sky-500/30 whitespace-nowrap font-medium">All</button>
+                    <button onclick="setCategory('temperature')" class="category-pill px-2.5 py-1 rounded-md bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700 whitespace-nowrap">🌡️ Temp</button>
+                    <button onclick="setCategory('humidity')" class="category-pill px-2.5 py-1 rounded-md bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700 whitespace-nowrap">💧 Humidity</button>
+                    <button onclick="setCategory('energy')" class="category-pill px-2.5 py-1 rounded-md bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700 whitespace-nowrap">⚡ Energy</button>
+                    <button onclick="setCategory('power')" class="category-pill px-2.5 py-1 rounded-md bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700 whitespace-nowrap">🔌 Power</button>
+                    <button onclick="setCategory('battery')" class="category-pill px-2.5 py-1 rounded-md bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700 whitespace-nowrap">🔋 Battery</button>
+                    <button onclick="setCategory('static')" class="category-pill px-2.5 py-1 rounded-md bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700 whitespace-nowrap">📌 Static</button>
+                </div>
+
+            </div>
+
+            <!-- Sensor List -->
+            <div class="flex-1 overflow-y-auto p-2 space-y-1" id="sensor-list">
+                <div class="text-center py-8 text-xs text-slate-500">Loading sensors...</div>
+            </div>
+
+            <!-- Multi-select toggle info -->
+            <div class="p-3 border-t border-slate-800 bg-slate-950/60 text-[11px] text-slate-400 flex items-center justify-between">
+                <span>Hold Ctrl / Cmd to multi-select</span>
+                <span id="selected-count" class="font-mono text-sky-400">0 selected</span>
+            </div>
+        </aside>
+
+        <!-- Main Content View Area -->
+        <main class="flex-1 flex flex-col bg-slate-950 overflow-y-auto">
+            
+            <!-- Controls & Controls Bar -->
+            <div class="p-4 border-b border-slate-800 bg-slate-900/30 flex flex-wrap items-center justify-between gap-4">
+                
+                <!-- Navigation Tabs -->
+                <div class="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800 text-xs">
+                    <button onclick="switchTab('chart')" id="tab-btn-chart" class="tab-btn px-3 py-1.5 rounded-lg bg-sky-500 text-white font-medium shadow-sm transition">Time Series</button>
+                    <button onclick="switchTab('heatmap')" id="tab-btn-heatmap" class="tab-btn px-3 py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition">Year Heatmap</button>
+                    <button onclick="switchTab('compare')" id="tab-btn-compare" class="tab-btn px-3 py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition">Period Compare</button>
+                    <button onclick="switchTab('summary')" id="tab-btn-summary" class="tab-btn px-3 py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition">Summary Stats</button>
+                    <button onclick="switchTab('manage')" id="tab-btn-manage" class="tab-btn px-3 py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition">Manage Sensors</button>
+                </div>
+
+                <!-- Query Options: Resolution, Metric, Preset -->
+                <div class="flex flex-wrap items-center gap-3 text-xs">
+                    
+                    <!-- Resolution / Interval -->
+                    <div class="flex items-center gap-1.5 bg-slate-900 px-2 py-1 rounded-lg border border-slate-800">
+                        <span class="text-slate-500 font-medium">Interval:</span>
+                        <select id="select-interval" onchange="fetchData()" class="bg-transparent text-slate-200 focus:outline-none font-medium cursor-pointer">
+                            <option value="raw" class="bg-slate-900">Raw</option>
+                            <option value="hour" class="bg-slate-900">Hourly</option>
+                            <option value="day" selected class="bg-slate-900">Daily</option>
+                            <option value="week" class="bg-slate-900">Weekly</option>
+                            <option value="month" class="bg-slate-900">Monthly</option>
+                            <option value="year" class="bg-slate-900">Yearly</option>
+                        </select>
+                    </div>
+
+                    <!-- Metric -->
+                    <div class="flex items-center gap-1.5 bg-slate-900 px-2 py-1 rounded-lg border border-slate-800">
+                        <span class="text-slate-500 font-medium">Metric:</span>
+                        <select id="select-metric" onchange="fetchData()" class="bg-transparent text-slate-200 focus:outline-none font-medium cursor-pointer">
+                            <option value="avg" selected class="bg-slate-900">Average</option>
+                            <option value="min" class="bg-slate-900">Minimum</option>
+                            <option value="max" class="bg-slate-900">Maximum</option>
+                            <option value="sum" class="bg-slate-900">Sum</option>
+                        </select>
+                    </div>
+
+                    <!-- Date Presets -->
+                    <div class="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800" id="date-preset-pills">
+                        <button onclick="setPreset('24h')" class="preset-pill px-2 py-1 rounded text-slate-400 hover:text-slate-200">24h</button>
+                        <button onclick="setPreset('7d')" class="preset-pill px-2 py-1 rounded text-slate-400 hover:text-slate-200">7d</button>
+                        <button onclick="setPreset('30d')" class="preset-pill active px-2 py-1 rounded bg-slate-800 text-sky-400 font-medium">30d</button>
+                        <button onclick="setPreset('1y')" class="preset-pill px-2 py-1 rounded text-slate-400 hover:text-slate-200">1y</button>
+                        <button onclick="setPreset('all')" class="preset-pill px-2 py-1 rounded text-slate-400 hover:text-slate-200">All</button>
+                    </div>
+
+                    <!-- Export CSV -->
+                    <button onclick="exportCSV()" class="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 transition title='Export CSV'">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Tab Content 1: Time Series Chart -->
+            <div id="tab-content-chart" class="flex-1 p-6 flex flex-col min-h-[500px]">
+                <div class="glass rounded-2xl p-4 flex-1 flex flex-col border border-slate-800/80 shadow-2xl relative">
+                    <div id="chart-container" class="w-full h-full min-h-[450px]"></div>
+                </div>
+            </div>
+
+            <!-- Tab Content 2: Calendar Heatmap -->
+            <div id="tab-content-heatmap" class="flex-1 p-6 flex flex-col min-h-[500px] hidden">
+                <div class="glass rounded-2xl p-6 flex-1 flex flex-col border border-slate-800/80">
+                    <div class="flex items-center justify-between mb-4">
+                        <div>
+                            <h2 class="text-sm font-semibold text-white">Yearly Daily Heatmap</h2>
+                            <p class="text-xs text-slate-400">Visualization of daily aggregated values across all months</p>
+                        </div>
+                        <div class="flex items-center gap-2 text-xs">
+                            <span class="text-slate-400">Year:</span>
+                            <select id="heatmap-year" onchange="renderHeatmap()" class="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1 text-slate-200">
+                                <option value="2026">2026</option>
+                                <option value="2025">2025</option>
+                                <option value="2024">2024</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="heatmap-container" class="w-full h-full min-h-[400px]"></div>
+                </div>
+            </div>
+
+            <!-- Tab Content 3: Period Compare -->
+            <div id="tab-content-compare" class="flex-1 p-6 flex flex-col min-h-[500px] hidden">
+                <div class="glass rounded-2xl p-6 flex-1 flex flex-col border border-slate-800/80">
+                    <div class="flex items-center justify-between mb-4">
+                        <div>
+                            <h2 class="text-sm font-semibold text-white">Month-by-Month Comparison</h2>
+                            <p class="text-xs text-slate-400">Compare monthly averages across different years</p>
+                        </div>
+                    </div>
+                    <div id="compare-container" class="w-full h-full min-h-[400px]"></div>
+                </div>
+            </div>
+
+            <!-- Tab Content 4: Summary Cards -->
+            <div id="tab-content-summary" class="flex-1 p-6 space-y-6 hidden">
+                <div id="summary-cards-container" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+                    <!-- Cards rendered dynamically -->
+                </div>
+                
+                <div class="glass rounded-2xl p-6 border border-slate-800/80">
+                    <h3 class="text-sm font-semibold text-white mb-4">Detailed Entity Statistics</h3>
+                    <div id="summary-details-table" class="text-xs text-slate-300 overflow-x-auto">
+                        <!-- Details table rendered dynamically -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab Content 5: Manage Sensors -->
+            <div id="tab-content-manage" class="flex-1 p-6 hidden">
+                <div class="glass rounded-2xl p-6 border border-slate-800/80 space-y-4">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h2 class="text-sm font-semibold text-white">Manage Tracked Sensors</h2>
+                            <p class="text-xs text-slate-400">Toggle long-term logging on or off for individual Home Assistant sensors</p>
+                        </div>
+                    </div>
+                    <div class="overflow-x-auto border border-slate-800 rounded-xl">
+                        <table class="w-full text-left text-xs text-slate-300">
+                            <thead class="bg-slate-900 text-slate-400 font-medium border-b border-slate-800">
+                                <tr>
+                                    <th class="p-3">Status</th>
+                                    <th class="p-3">Entity ID</th>
+                                    <th class="p-3">Friendly Name</th>
+                                    <th class="p-3">Device Class</th>
+                                    <th class="p-3 cursor-pointer hover:text-sky-400 transition" onclick="setSort(currentSort === 'last_updated_desc' ? 'last_updated_asc' : 'last_updated_desc')" title="Click to sort by Last Updated">
+                                        Last Updated ↕
+                                    </th>
+                                    <th class="p-3">Unit</th>
+                                    <th class="p-3 text-right">Actions</th>
+                                </tr>
+
+                            </thead>
+                            <tbody id="manage-sensors-tbody" class="divide-y divide-slate-800/60">
+                                <!-- Rendered dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- Application Script -->
+    <script>
+        // State
+        let allSensors = [];
+        let selectedSensorIds = [];
+        let activeCategory = null;
+        let activeTab = 'chart';
+        let activePreset = '30d';
+        let currentSort = 'name'; // name, last_updated_desc, last_updated_asc
+        let mainChart = null;
+        let heatmapChart = null;
+        let compareChart = null;
+
+        function setSort(mode) {
+            currentSort = mode;
+            const selectElem = document.getElementById('sensor-sort');
+            if (selectElem && selectElem.value !== mode) {
+                selectElem.value = mode;
+            }
+            renderSensorList();
+            renderManageSensorsTable();
+        }
+
+        function sortSensors(sensorArray) {
+            return [...sensorArray].sort((a, b) => {
+                if (currentSort === 'last_updated_desc') {
+                    return (b.last_seen || '').localeCompare(a.last_seen || '');
+                } else if (currentSort === 'last_updated_asc') {
+                    return (a.last_seen || '').localeCompare(b.last_seen || '');
+                } else {
+                    const nameA = a.friendly_name || a.entity_id;
+                    const nameB = b.friendly_name || b.entity_id;
+                    return nameA.localeCompare(nameB);
+                }
+            });
+        }
+
+        function formatTimeAgo(isoStr) {
+            if (!isoStr) return '';
+            try {
+                const dt = new Date(isoStr);
+                if (isNaN(dt.getTime())) return isoStr;
+                const now = new Date();
+                const diffSec = Math.floor((now - dt) / 1000);
+                if (diffSec < 60) return 'just now';
+                if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+                if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+                return dt.toLocaleDateString([], { month: 'short', day: 'numeric' });
+            } catch {
+                return isoStr;
+            }
+        }
+
+        // Initialize ECharts instances
+        function initCharts() {
+            const chartElem = document.getElementById('chart-container');
+            if (chartElem) mainChart = echarts.init(chartElem, 'dark');
+
+            const heatElem = document.getElementById('heatmap-container');
+            if (heatElem) heatmapChart = echarts.init(heatElem, 'dark');
+
+            const compElem = document.getElementById('compare-container');
+            if (compElem) compareChart = echarts.init(compElem, 'dark');
+
+            window.addEventListener('resize', () => {
+                if (mainChart) mainChart.resize();
+                if (heatmapChart) heatmapChart.resize();
+                if (compareChart) compareChart.resize();
+            });
+        }
+
+        // Fetch Status & Sensors on startup
+        async function fetchStatus() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                
+                const badge = document.getElementById('ha-status-badge');
+                if (data.ha_connected) {
+                    badge.innerHTML = `<span class="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-lg shadow-emerald-500/50"></span><span class="text-emerald-400 font-medium">Connected to HA</span>`;
+                } else {
+                    badge.innerHTML = `<span class="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping"></span><span class="text-rose-400 font-medium">HA Disconnected</span>`;
+                }
+
+                if (data.db) {
+                    document.getElementById('db-records-badge').innerText = `${data.db.total_raw_records.toLocaleString()} Records`;
+                    document.getElementById('db-size-badge').innerText = `${data.db.db_size_mb} MB`;
+                }
+            } catch (err) {
+                console.error("Status fetch error:", err);
+            }
+        }
+
+        async function fetchSensors() {
+            try {
+                const res = await fetch(`/api/sensors?sort_by=${currentSort}`);
+                allSensors = await res.json();
+                renderSensorList();
+                renderManageSensorsTable();
+
+                // Default select first sensor if none selected
+                if (selectedSensorIds.length === 0 && allSensors.length > 0) {
+                    // Try to find a temperature sensor first
+                    const tempSensor = allSensors.find(s => s.device_class === 'temperature') || allSensors[0];
+                    selectedSensorIds = [tempSensor.entity_id];
+                    renderSensorList();
+                    fetchData();
+                }
+            } catch (err) {
+                console.error("Sensors fetch error:", err);
+            }
+        }
+
+        // Render Left Sidebar Sensors
+        function renderSensorList() {
+            const listElem = document.getElementById('sensor-list');
+            const search = document.getElementById('sensor-search').value.toLowerCase();
+            
+            const filtered = allSensors.filter(s => {
+                const matchesSearch = s.entity_id.toLowerCase().includes(search) || (s.friendly_name && s.friendly_name.toLowerCase().includes(search));
+                const matchesCategory = !activeCategory || (activeCategory === 'static' ? s.is_static === true : s.device_class === activeCategory);
+                return matchesSearch && matchesCategory;
+            });
+
+            const sorted = sortSensors(filtered);
+
+            if (sorted.length === 0) {
+                listElem.innerHTML = `<div class="text-center py-8 text-xs text-slate-500">No sensors match filter</div>`;
+                return;
+            }
+
+            listElem.innerHTML = sorted.map(s => {
+                const isSelected = selectedSensorIds.includes(s.entity_id);
+                const icon = getDeviceClassIcon(s.device_class);
+                const unit = s.unit_of_measurement ? `<span class="text-[10px] text-slate-400 font-mono ml-1">${s.unit_of_measurement}</span>` : '';
+                const lastUpdatedTime = s.last_seen ? formatTimeAgo(s.last_seen) : '';
+                const staticIcon = s.is_static ? `<span class="text-amber-400 text-xs shrink-0" title="Static Value: Sensor only ever reports a constant value">📌</span>` : '';
+
+                return `
+                    <div onclick="toggleSelectSensor('${s.entity_id}', event)" 
+                         class="p-2.5 rounded-xl cursor-pointer transition flex items-center justify-between border ${isSelected ? 'bg-sky-500/10 border-sky-500/30 text-sky-300' : 'bg-slate-900/40 border-slate-800/60 hover:bg-slate-800/60 text-slate-300'}">
+                        <div class="flex items-center space-x-2.5 min-w-0 flex-1">
+                            <span class="text-base shrink-0 flex items-center gap-1">${icon}${staticIcon}</span>
+                            <div class="truncate min-w-0 flex-1">
+                                <div class="text-xs font-medium truncate flex items-center justify-between gap-1">
+                                    <span class="truncate">${s.friendly_name || s.entity_id}</span>
+                                    ${lastUpdatedTime ? `<span class="text-[9px] text-slate-500 font-mono shrink-0" title="${s.last_seen}">${lastUpdatedTime}</span>` : ''}
+                                </div>
+                                <div class="text-[10px] text-slate-400 font-mono truncate">${s.entity_id}</div>
+                            </div>
+                        </div>
+                        <div class="shrink-0 pl-2">
+                            ${unit}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+
+            document.getElementById('selected-count').innerText = `${selectedSensorIds.length} selected`;
+        }
+
+        function getDeviceClassIcon(dc) {
+
+            switch(dc) {
+                case 'temperature': return '🌡️';
+                case 'humidity': return '💧';
+                case 'energy': return '⚡';
+                case 'power': return '🔌';
+                case 'battery': return '🔋';
+                case 'pressure': return '⏲️';
+                case 'illuminance': return '☀️';
+                default: return '📊';
+            }
+        }
+
+        function toggleSelectSensor(entityId, event) {
+            if (event.ctrlKey || event.metaKey) {
+                if (selectedSensorIds.includes(entityId)) {
+                    selectedSensorIds = selectedSensorIds.filter(id => id !== entityId);
+                } else {
+                    selectedSensorIds.push(entityId);
+                }
+            } else {
+                selectedSensorIds = [entityId];
+            }
+            renderSensorList();
+            fetchData();
+        }
+
+        function setCategory(cat) {
+            activeCategory = cat;
+            document.querySelectorAll('.category-pill').forEach(el => {
+                el.classList.remove('active', 'bg-sky-500/20', 'text-sky-400', 'border-sky-500/30', 'font-medium');
+                el.classList.add('bg-slate-800', 'text-slate-400', 'border-slate-700');
+            });
+            event.target.classList.add('active', 'bg-sky-500/20', 'text-sky-400', 'border-sky-500/30', 'font-medium');
+            event.target.classList.remove('bg-slate-800', 'text-slate-400', 'border-slate-700');
+            renderSensorList();
+        }
+
+        document.getElementById('sensor-search').addEventListener('input', renderSensorList);
+
+        // Date Presets
+        function setPreset(preset) {
+            activePreset = preset;
+            document.querySelectorAll('.preset-pill').forEach(el => {
+                el.classList.remove('active', 'bg-slate-800', 'text-sky-400', 'font-medium');
+                el.classList.add('text-slate-400');
+            });
+            event.target.classList.add('active', 'bg-slate-800', 'text-sky-400', 'font-medium');
+            event.target.classList.remove('text-slate-400');
+
+            // Adjust default interval based on preset
+            const selectInt = document.getElementById('select-interval');
+            if (preset === '24h') selectInt.value = 'hour';
+            else if (preset === '7d' || preset === '30d') selectInt.value = 'day';
+            else if (preset === '1y') selectInt.value = 'month';
+            else if (preset === 'all') selectInt.value = 'year';
+
+            fetchData();
+        }
+
+        function getStartEndTime() {
+            const now = new Date();
+            let start = null;
+            let end = now.toISOString();
+
+            if (activePreset === '24h') {
+                start = new Date(now.getTime() - 24 * 3600 * 1000).toISOString();
+            } else if (activePreset === '7d') {
+                start = new Date(now.getTime() - 7 * 24 * 3600 * 1000).toISOString();
+            } else if (activePreset === '30d') {
+                start = new Date(now.getTime() - 30 * 24 * 3600 * 1000).toISOString();
+            } else if (activePreset === '1y') {
+                start = new Date(now.getTime() - 365 * 24 * 3600 * 1000).toISOString();
+            }
+            return { start, end };
+        }
+
+        // Tab Navigation
+        function switchTab(tab) {
+            activeTab = tab;
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('bg-sky-500', 'text-white', 'font-medium', 'shadow-sm');
+                btn.classList.add('text-slate-400');
+            });
+            const activeBtn = document.getElementById(`tab-btn-${tab}`);
+            if (activeBtn) {
+                activeBtn.classList.add('bg-sky-500', 'text-white', 'font-medium', 'shadow-sm');
+                activeBtn.classList.remove('text-slate-400');
+            }
+
+            document.getElementById('tab-content-chart').classList.add('hidden');
+            document.getElementById('tab-content-heatmap').classList.add('hidden');
+            document.getElementById('tab-content-compare').classList.add('hidden');
+            document.getElementById('tab-content-summary').classList.add('hidden');
+            document.getElementById('tab-content-manage').classList.add('hidden');
+
+            document.getElementById(`tab-content-${tab}`).classList.remove('hidden');
+
+            fetchData();
+        }
+
+        // Fetch and Render Active Tab Data
+        async function fetchData() {
+            if (selectedSensorIds.length === 0) return;
+
+            if (activeTab === 'chart') {
+                renderTimeSeriesChart();
+            } else if (activeTab === 'heatmap') {
+                renderHeatmap();
+            } else if (activeTab === 'compare') {
+                renderCompareChart();
+            } else if (activeTab === 'summary') {
+                renderSummaryCards();
+            }
+        }
+
+        // 1. Time Series Line Chart with Min/Max Envelope
+        async function renderTimeSeriesChart() {
+            if (!mainChart) return;
+            mainChart.showLoading({ text: 'Loading data...', color: '#0284c7', backgroundColor: 'transparent' });
+
+            const interval = document.getElementById('select-interval').value;
+            const metric = document.getElementById('select-metric').value;
+            const { start, end } = getStartEndTime();
+
+            const params = new URLSearchParams({
+                entity_ids: selectedSensorIds.join(','),
+                interval: interval,
+                metric: metric,
+            });
+            if (start) params.append('start_time', start);
+            if (end) params.append('end_time', end);
+
+            try {
+                const res = await fetch(`/api/stats?${params.toString()}`);
+                const resData = await res.json();
+                
+                const seriesList = [];
+                const entityData = resData.data;
+
+                Object.keys(entityData).forEach((eid, idx) => {
+                    const sensor = allSensors.find(s => s.entity_id === eid) || { friendly_name: eid };
+                    const points = entityData[eid] || [];
+
+                    const times = points.map(p => p.time);
+                    const values = points.map(p => p.value !== null ? roundVal(p.value) : null);
+                    
+                    // Main line
+                    seriesList.push({
+                        name: sensor.friendly_name || eid,
+                        type: 'line',
+                        smooth: true,
+                        showSymbol: points.length < 50,
+                        data: values,
+                    });
+
+                    // Add Min/Max area range band if daily or hourly
+                    if ((interval === 'day' || interval === 'hour') && points[0] && points[0].min_val !== undefined) {
+                        const minVals = points.map(p => p.min_val !== null ? roundVal(p.min_val) : null);
+                        const maxVals = points.map(p => p.max_val !== null ? roundVal(p.max_val) : null);
+
+                        seriesList.push({
+                            name: `${sensor.friendly_name || eid} (Range)`,
+                            type: 'line',
+                            data: maxVals,
+                            lineStyle: { opacity: 0 },
+                            stack: 'confidence-band',
+                            symbol: 'none'
+                        });
+                        seriesList.push({
+                            name: `${sensor.friendly_name || eid} (Range)`,
+                            type: 'line',
+                            data: minVals.map((min, i) => maxVals[i] !== null && min !== null ? roundVal(maxVals[i] - min) : 0),
+                            lineStyle: { opacity: 0 },
+                            areaStyle: { color: 'rgba(2, 132, 199, 0.15)' },
+                            stack: 'confidence-band',
+                            symbol: 'none'
+                        });
+                    }
+                });
+
+                const times = entityData[selectedSensorIds[0]]?.map(p => p.time) || [];
+
+                const option = {
+                    backgroundColor: 'transparent',
+                    tooltip: {
+                        trigger: 'axis',
+                        backgroundColor: '#0f172a',
+                        borderColor: '#334155',
+                        textStyle: { color: '#f8fafc', fontSize: 12 }
+                    },
+                    legend: {
+                        top: '2%',
+                        textStyle: { color: '#94a3b8' }
+                    },
+                    grid: {
+                        left: '4%',
+                        right: '4%',
+                        bottom: '10%',
+                        top: '12%',
+                        containLabel: true
+                    },
+                    dataZoom: [
+                        { type: 'inside' },
+                        { type: 'slider', bottom: '2%', handleStyle: { color: '#0284c7' } }
+                    ],
+                    xAxis: {
+                        type: 'category',
+                        boundaryGap: false,
+                        data: times,
+                        axisLine: { lineStyle: { color: '#334155' } },
+                        axisLabel: { color: '#94a3b8' }
+                    },
+                    yAxis: {
+                        type: 'value',
+                        axisLine: { lineStyle: { color: '#334155' } },
+                        splitLine: { lineStyle: { color: '#1e293b' } },
+                        axisLabel: { color: '#94a3b8' }
+                    },
+                    series: seriesList
+                };
+
+                mainChart.hideLoading();
+                mainChart.setOption(option, true);
+
+            } catch (err) {
+                console.error("Time series fetch error:", err);
+                mainChart.hideLoading();
+            }
+        }
+
+        // 2. Calendar Heatmap
+        async function renderHeatmap() {
+            if (!heatmapChart || selectedSensorIds.length === 0) return;
+            heatmapChart.showLoading({ text: 'Loading heatmap...', color: '#0284c7', backgroundColor: 'transparent' });
+
+            const entityId = selectedSensorIds[0];
+            const year = document.getElementById('heatmap-year').value;
+
+            try {
+                const res = await fetch(`/api/stats/heatmap?entity_id=${encodeURIComponent(entityId)}&year=${year}`);
+                const result = await res.json();
+                const rawData = result.data || [];
+
+                // Format data: [[YYYY-MM-DD, avg_val]]
+                const heatmapPoints = rawData.map(d => [d[0], d[1]]);
+
+                const option = {
+                    backgroundColor: 'transparent',
+                    tooltip: {
+                        formatter: function (p) {
+                            return `<div class="font-mono text-xs"><b>${p.value[0]}</b><br/>Avg: ${p.value[1]}</div>`;
+                        },
+                        backgroundColor: '#0f172a',
+                        borderColor: '#334155',
+                        textStyle: { color: '#f8fafc' }
+                    },
+                    visualMap: {
+                        min: Math.min(...heatmapPoints.map(p => p[1])) || 0,
+                        max: Math.max(...heatmapPoints.map(p => p[1])) || 30,
+                        type: 'continuous',
+                        orient: 'horizontal',
+                        left: 'center',
+                        top: '5%',
+                        inRange: {
+                            color: ['#075985', '#0284c7', '#38bdf8', '#fbbf24', '#f97316', '#ef4444']
+                        },
+                        textStyle: { color: '#94a3b8' }
+                    },
+                    calendar: {
+                        top: '25%',
+                        left: '5%',
+                        right: '5%',
+                        cellSize: ['auto', 20],
+                        range: year,
+                        itemStyle: {
+                            color: '#0f172a',
+                            borderWidth: 2,
+                            borderColor: '#020617'
+                        },
+                        yearLabel: { show: false },
+                        dayLabel: { color: '#94a3b8' },
+                        monthLabel: { color: '#94a3b8' }
+                    },
+                    series: [{
+                        type: 'heatmap',
+                        coordinateSystem: 'calendar',
+                        data: heatmapPoints
+                    }]
+                };
+
+                heatmapChart.hideLoading();
+                heatmapChart.setOption(option, true);
+
+            } catch (err) {
+                console.error("Heatmap fetch error:", err);
+                heatmapChart.hideLoading();
+            }
+        }
+
+        // 3. Month-by-Month Compare
+        async function renderCompareChart() {
+            if (!compareChart || selectedSensorIds.length === 0) return;
+            compareChart.showLoading({ text: 'Loading comparison...', color: '#0284c7', backgroundColor: 'transparent' });
+
+            const entityId = selectedSensorIds[0];
+            const metric = document.getElementById('select-metric').value;
+
+            try {
+                const res = await fetch(`/api/stats/compare?entity_id=${encodeURIComponent(entityId)}&metric=${metric}`);
+                const result = await res.json();
+                
+                const seriesData = result.series || {};
+                const months = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"];
+                const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+                const seriesList = Object.keys(seriesData).map(yr => {
+                    return {
+                        name: yr,
+                        type: 'bar',
+                        data: months.map(m => seriesData[yr][m] !== undefined ? seriesData[yr][m] : null)
+                    };
+                });
+
+                const option = {
+                    backgroundColor: 'transparent',
+                    tooltip: {
+                        trigger: 'axis',
+                        axisPointer: { type: 'shadow' },
+                        backgroundColor: '#0f172a',
+                        borderColor: '#334155',
+                        textStyle: { color: '#f8fafc' }
+                    },
+                    legend: {
+                        top: '2%',
+                        textStyle: { color: '#94a3b8' }
+                    },
+                    grid: {
+                        left: '4%',
+                        right: '4%',
+                        bottom: '10%',
+                        top: '15%',
+                        containLabel: true
+                    },
+                    xAxis: {
+                        type: 'category',
+                        data: monthNames,
+                        axisLine: { lineStyle: { color: '#334155' } },
+                        axisLabel: { color: '#94a3b8' }
+                    },
+                    yAxis: {
+                        type: 'value',
+                        axisLine: { lineStyle: { color: '#334155' } },
+                        splitLine: { lineStyle: { color: '#1e293b' } },
+                        axisLabel: { color: '#94a3b8' }
+                    },
+                    series: seriesList
+                };
+
+                compareChart.hideLoading();
+                compareChart.setOption(option, true);
+
+            } catch (err) {
+                console.error("Compare chart fetch error:", err);
+                compareChart.hideLoading();
+            }
+        }
+
+        // 4. Summary Cards & Details
+        async function renderSummaryCards() {
+            if (selectedSensorIds.length === 0) return;
+            const container = document.getElementById('summary-cards-container');
+            container.innerHTML = `<div class="col-span-full text-center py-6 text-xs text-slate-500">Loading summary...</div>`;
+
+            const entityId = selectedSensorIds[0];
+            try {
+                const res = await fetch(`/api/stats/summary?entity_id=${encodeURIComponent(entityId)}`);
+                const s = await res.json();
+                
+                const unit = s.entity?.unit_of_measurement || '';
+                const latestVal = s.latest ? s.latest.value : 'N/A';
+
+                const cardData = [
+                    { title: 'Current Value', val: `${latestVal} ${unit}`, sub: s.latest ? s.latest.timestamp.substring(0, 16) : '', color: 'border-sky-500/40 text-sky-400' },
+                    { title: '24h Stats', val: `Avg: ${s.stats_24h.avg ?? 'N/A'} ${unit}`, sub: `Min: ${s.stats_24h.min ?? 'N/A'} • Max: ${s.stats_24h.max ?? 'N/A'}`, color: 'border-slate-800 text-slate-200' },
+                    { title: '7d Stats', val: `Avg: ${s.stats_7d.avg ?? 'N/A'} ${unit}`, sub: `Min: ${s.stats_7d.min ?? 'N/A'} • Max: ${s.stats_7d.max ?? 'N/A'}`, color: 'border-slate-800 text-slate-200' },
+                    { title: '30d Stats', val: `Avg: ${s.stats_30d.avg ?? 'N/A'} ${unit}`, sub: `Min: ${s.stats_30d.min ?? 'N/A'} • Max: ${s.stats_30d.max ?? 'N/A'}`, color: 'border-slate-800 text-slate-200' },
+                    { title: '1y Stats', val: `Avg: ${s.stats_365d.avg ?? 'N/A'} ${unit}`, sub: `Min: ${s.stats_365d.min ?? 'N/A'} • Max: ${s.stats_365d.max ?? 'N/A'}`, color: 'border-slate-800 text-slate-200' },
+                    { title: 'All-Time Records', val: `Min: ${s.stats_all_time.min ?? 'N/A'}`, sub: `Max: ${s.stats_all_time.max ?? 'N/A'} ${unit}`, color: 'border-amber-500/40 text-amber-400' },
+                ];
+
+                container.innerHTML = cardData.map(c => `
+                    <div class="glass p-4 rounded-xl border ${c.color} shadow-lg space-y-1">
+                        <div class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">${c.title}</div>
+                        <div class="text-base font-bold font-mono tracking-tight">${c.val}</div>
+                        <div class="text-[10px] text-slate-400">${c.sub}</div>
+                    </div>
+                `).join('');
+
+                // Render Table
+                document.getElementById('summary-details-table').innerHTML = `
+                    <table class="w-full text-left">
+                        <tr class="border-b border-slate-800"><td class="py-2 text-slate-400">Entity ID</td><td class="font-mono text-sky-400">${s.entity.entity_id}</td></tr>
+                        <tr class="border-b border-slate-800"><td class="py-2 text-slate-400">Friendly Name</td><td>${s.entity.friendly_name || '-'}</td></tr>
+                        <tr class="border-b border-slate-800"><td class="py-2 text-slate-400">Device Class</td><td class="font-mono">${s.entity.device_class || '-'}</td></tr>
+                        <tr class="border-b border-slate-800"><td class="py-2 text-slate-400">State Class</td><td class="font-mono">${s.entity.state_class || '-'}</td></tr>
+                        <tr class="border-b border-slate-800"><td class="py-2 text-slate-400">First Recorded</td><td class="font-mono">${s.entity.first_seen}</td></tr>
+                        <tr><td class="py-2 text-slate-400">Last Recorded</td><td class="font-mono">${s.entity.last_seen}</td></tr>
+                    </table>
+                `;
+
+            } catch (err) {
+                console.error("Summary fetch error:", err);
+            }
+        }
+
+        // 5. Manage Sensors Table
+        function renderManageSensorsTable() {
+            const tbody = document.getElementById('manage-sensors-tbody');
+            if (!tbody) return;
+
+            const sorted = sortSensors(allSensors);
+
+            tbody.innerHTML = sorted.map(s => `
+                <tr class="hover:bg-slate-900/50 transition">
+                    <td class="p-3">
+                        <span class="w-2 h-2 inline-block rounded-full ${s.enabled ? 'bg-emerald-400' : 'bg-slate-600'}"></span>
+                    </td>
+                    <td class="p-3 font-mono text-sky-400">${s.entity_id}</td>
+                    <td class="p-3 font-medium">${s.friendly_name || '-'}</td>
+                    <td class="p-3 font-mono text-slate-400">${s.device_class || '-'}</td>
+                    <td class="p-3 font-mono text-slate-400 text-[11px]">${s.last_seen ? s.last_seen.substring(0, 19).replace('T', ' ') : '-'}</td>
+                    <td class="p-3 font-mono text-slate-400">${s.unit_of_measurement || '-'}</td>
+                    <td class="p-3 text-right">
+                        <button onclick="toggleSensorEnabled('${s.entity_id}', ${!s.enabled})" 
+                                class="px-2.5 py-1 rounded-lg text-xs font-medium border ${s.enabled ? 'bg-rose-500/10 text-rose-400 border-rose-500/20 hover:bg-rose-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20'}">
+                            ${s.enabled ? 'Disable' : 'Enable'}
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+
+        async function toggleSensorEnabled(entityId, enabled) {
+            try {
+                await fetch(`/api/sensors/${encodeURIComponent(entityId)}/toggle`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled })
+                });
+                await fetchSensors();
+            } catch (err) {
+                console.error("Toggle sensor error:", err);
+            }
+        }
+
+        async function triggerRollup() {
+            try {
+                const res = await fetch('/api/trigger-rollup', { method: 'POST' });
+                const data = await res.json();
+                alert(data.message || 'Rollups calculated!');
+                fetchStatus();
+                fetchData();
+            } catch (err) {
+                console.error("Trigger rollup error:", err);
+            }
+        }
+
+        function exportCSV() {
+            if (selectedSensorIds.length === 0) return;
+            const entityId = selectedSensorIds[0];
+            const interval = document.getElementById('select-interval').value;
+            window.location.href = `/api/export?entity_id=${encodeURIComponent(entityId)}&interval=${interval}`;
+        }
+
+        function roundVal(v) {
+            return typeof v === 'number' ? Math.round(v * 100) / 100 : v;
+        }
+
+        // Application Startup
+        window.addEventListener('DOMContentLoaded', () => {
+            initCharts();
+            fetchStatus();
+            fetchSensors();
+
+            // Refresh status periodically
+            setInterval(fetchStatus, 15000);
+        });
+    </script>
+</body>
+</html>

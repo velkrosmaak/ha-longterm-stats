@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  ha-longterm-stats:
+    build: .
+    container_name: ha-longterm-stats
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - HA_URL=http://homeassistant.local:8123
+      - HA_TOKEN=your_long_lived_access_token_here
+      - DB_PATH=/app/data/ha_stats.db
+      - AUTO_AGGREGATE_INTERVAL_MINUTES=15
+      - PRUNE_RAW_DAYS=0
+    volumes:
+      - ./data:/app/data
