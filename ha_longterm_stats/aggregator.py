@@ -15,12 +15,13 @@ class RollupAggregator:
     async def start(self):
         self._running = True
         logger.info(f"Starting background rollup aggregator task (runs every {self.interval_seconds // 60} minutes)...")
+        loop = asyncio.get_event_loop()
         while self._running:
             try:
                 logger.debug("Executing periodic database rollup calculation...")
-                self.db.calculate_rollups()
+                await loop.run_in_executor(None, self.db.calculate_rollups)
                 if self.prune_raw_days > 0:
-                    self.db.prune_raw_data(self.prune_raw_days)
+                    await loop.run_in_executor(None, self.db.prune_raw_data, self.prune_raw_days)
             except Exception as e:
                 logger.error(f"Error during rollup calculation: {e}")
             

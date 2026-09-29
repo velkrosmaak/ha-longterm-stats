@@ -47,29 +47,33 @@ class HomeAssistantClient:
         except (ValueError, TypeError):
             return None, raw_val
 
-    def _process_state_object(self, state_obj: Dict[str, Any], queue_write: bool = True) -> Optional[Tuple[str, str, Optional[float], str]]:
+    def _parse_state_object(
+        self,
+        state_obj: Dict[str, Any],
+        now: datetime.datetime,
+    ) -> Optional[Tuple[Tuple, Optional[Tuple]]]:
+        """Pure CPU parse — zero DB calls.
+        Returns (entity_meta_tuple, reading_tuple_or_None) or None if not a sensor.
+        entity_meta: (entity_id, friendly_name, uom, device_class, state_class, now_str, now_str)
+        reading:     (entity_id, ts_str, val_float, raw_val)
+        """
         entity_id = state_obj.get("entity_id")
         if not entity_id or not entity_id.startswith("sensor."):
             return None
 
         attributes = state_obj.get("attributes", {})
-        friendly_name = attributes.get("friendly_name")
-        unit_of_measurement = attributes.get("unit_of_measurement")
-        device_class = attributes.get("device_class")
-        state_class = attributes.get("state_class")
-
-        # 1. Upsert entity metadata
-        self.db.upsert_entity(
-            entity_id=entity_id,
-            friendly_name=friendly_name,
-            unit_of_measurement=unit_of_measurement,
-            device_class=device_class,
-            state_class=state_class,
+        now_str = now.isoformat()
+        entity_meta = (
+            entity_id,
+            attributes.get("friendly_name"),
+            attributes.get("unit_of_measurement"),
+            attributes.get("device_class"),
+            attributes.get("state_class"),
+            now_str,
+            now_str,
         )
 
-        # 2. Parse timestamp & state
         last_updated = state_obj.get("last_updated") or state_obj.get("last_changed")
-        now = datetime.datetime.now(datetime.timezone.utc)
         dt = None
         if last_updated:
             try:
@@ -78,33 +82,42 @@ class HomeAssistantClient:
             except Exception:
                 ts_str = last_updated
         else:
-            ts_str = now.isoformat()
-
-        # 3. Dormancy check: if sensor hasn't updated in 14+ days, skip history write
-        if dt and (now - dt).days >= config.dormant_days and not queue_write:
-            return None
+            ts_str = now_str
 
         val_float, raw_val = self._parse_value(state_obj.get("state"))
-
-        # 4. Store reading if online & numeric
         if val_float is not None:
-            reading = (entity_id, ts_str, val_float, raw_val)
-            if queue_write:
-                try:
-                    self._queue.put_nowait(reading)
-                except asyncio.QueueFull:
-                    pass
-            return reading
-        return None
+            return (entity_meta, (entity_id, ts_str, val_float, raw_val))
+        return (entity_meta, None)
+
+    async def _process_state_object(self, state_obj: Dict[str, Any], queue_write: bool = True) -> None:
+        """Handle a live state_changed event: parse, upsert entity in thread, queue reading."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        result = self._parse_state_object(state_obj, now)
+        if result is None:
+            return
+        entity_meta, reading = result
+        # Run the upsert in a thread so the WS message loop isn't blocked
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            self.db.upsert_entity,
+            entity_meta[0], entity_meta[1], entity_meta[2], entity_meta[3], entity_meta[4],
+        )
+        if reading and queue_write:
+            try:
+                self._queue.put_nowait(reading)
+            except asyncio.QueueFull:
+                pass
 
     async def _batch_flush_worker(self):
         logger.info(f"Starting async batch flush worker (flush every {config.batch_flush_interval}s or {config.batch_max_size} items)...")
+        loop = asyncio.get_event_loop()
         while self._running:
             try:
                 batch: List[Tuple[str, str, Optional[float], str]] = []
-                start_time = asyncio.get_event_loop().time()
+                start_time = loop.time()
                 while len(batch) < config.batch_max_size:
-                    elapsed = asyncio.get_event_loop().time() - start_time
+                    elapsed = loop.time() - start_time
                     remaining = config.batch_flush_interval - elapsed
                     if remaining <= 0 and batch:
                         break
@@ -118,7 +131,7 @@ class HomeAssistantClient:
                 
                 if batch:
                     logger.debug(f"Flushing batch of {len(batch)} sensor readings to database...")
-                    self.db.insert_readings_batch(batch)
+                    await loop.run_in_executor(None, self.db.insert_readings_batch, batch)
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -186,28 +199,50 @@ class HomeAssistantClient:
                             if data.get("id") == get_states_id and data.get("success"):
                                 result_states = data.get("result", [])
                                 logger.info(f"Received snapshot of {len(result_states)} states from Home Assistant.")
+
+                                # Pure CPU parse — zero DB calls on the event loop
+                                now = datetime.datetime.now(datetime.timezone.utc)
+                                entity_metas = []
                                 snapshot_readings = []
-                                for st in result_states:
-                                    reading = self._process_state_object(st, queue_write=False)
+                                for i, st in enumerate(result_states):
+                                    parsed = self._parse_state_object(st, now)
+                                    if parsed is None:
+                                        continue
+                                    entity_meta, reading = parsed
+                                    entity_metas.append(entity_meta)
+                                    # Dormancy filter: skip readings older than dormant_days
                                     if reading:
-                                        snapshot_readings.append(reading)
-                                    # Yield execution periodically during large snapshot parsing
-                                    if len(snapshot_readings) % 500 == 0:
+                                        last_updated = st.get("last_updated") or st.get("last_changed")
+                                        skip = False
+                                        if last_updated:
+                                            try:
+                                                dt = datetime.datetime.fromisoformat(last_updated.replace("Z", "+00:00"))
+                                                if (now - dt).days >= config.dormant_days:
+                                                    skip = True
+                                            except Exception:
+                                                pass
+                                        if not skip:
+                                            snapshot_readings.append(reading)
+                                    # Yield to event loop every 1000 items during parse
+                                    if i % 1000 == 0 and i > 0:
                                         await asyncio.sleep(0)
 
+                                # All DB work runs in a thread so the event loop stays responsive
+                                loop = asyncio.get_event_loop()
+                                logger.info(f"Batch upserting {len(entity_metas)} entities and inserting {len(snapshot_readings)} readings (background thread)...")
+                                await loop.run_in_executor(None, self.db.upsert_entities_batch, entity_metas)
                                 if snapshot_readings:
-                                    logger.info(f"Bulk inserting {len(snapshot_readings)} active snapshot sensor readings into database...")
-                                    self.db.insert_readings_batch(snapshot_readings)
-
-                                # Run initial rollups (incremental)
-                                self.db.calculate_rollups()
+                                    await loop.run_in_executor(None, self.db.insert_readings_batch, snapshot_readings)
+                                # Run initial rollups in background
+                                await loop.run_in_executor(None, self.db.calculate_rollups)
+                                logger.info("Snapshot ingestion complete. Now listening for live events.")
 
                         elif msg_type == "event":
                             event_data = data.get("event", {})
                             if event_data.get("event_type") == "state_changed":
                                 new_state = event_data.get("data", {}).get("new_state")
                                 if new_state:
-                                    self._process_state_object(new_state, queue_write=True)
+                                    await self._process_state_object(new_state, queue_write=True)
 
             except asyncio.CancelledError:
                 logger.info("Home Assistant Client loop cancelled.")

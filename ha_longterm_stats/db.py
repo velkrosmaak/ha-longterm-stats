@@ -122,6 +122,25 @@ class Database:
             """, (entity_id, friendly_name, unit_of_measurement, device_class, state_class, now_str, now_str))
             conn.commit()
 
+    def upsert_entities_batch(self, entities: List[Tuple]):
+        """Bulk upsert entity metadata in a single transaction.
+        Each tuple: (entity_id, friendly_name, unit_of_measurement, device_class, state_class, now_str)
+        """
+        if not entities:
+            return
+        with self.get_connection() as conn:
+            conn.executemany("""
+            INSERT INTO entities (entity_id, friendly_name, unit_of_measurement, device_class, state_class, enabled, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(entity_id) DO UPDATE SET
+                friendly_name = COALESCE(excluded.friendly_name, entities.friendly_name),
+                unit_of_measurement = COALESCE(excluded.unit_of_measurement, entities.unit_of_measurement),
+                device_class = COALESCE(excluded.device_class, entities.device_class),
+                state_class = COALESCE(excluded.state_class, entities.state_class),
+                last_seen = excluded.last_seen;
+            """, entities)
+            conn.commit()
+
     def set_entity_enabled(self, entity_id: str, enabled: bool):
         with self.get_connection() as conn:
             conn.execute("UPDATE entities SET enabled = ? WHERE entity_id = ?", (1 if enabled else 0, entity_id))
