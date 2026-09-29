@@ -2,10 +2,10 @@ import asyncio
 import json
 import logging
 import datetime
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, List, Tuple
 import websockets
+from ha_longterm_stats.config import config
 from ha_longterm_stats.db import Database
-
 
 logger = logging.getLogger("ha_longterm_stats.ha_client")
 
@@ -20,6 +20,8 @@ class HomeAssistantClient:
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self._running = False
         self._msg_id = 1
+        self._queue: asyncio.Queue[Tuple[str, str, Optional[float], str]] = asyncio.Queue()
+        self._flush_task: Optional[asyncio.Task] = None
 
     def _get_ws_url(self) -> str:
         url = self.ha_url.rstrip("/")
@@ -45,10 +47,10 @@ class HomeAssistantClient:
         except (ValueError, TypeError):
             return None, raw_val
 
-    def _process_state_object(self, state_obj: Dict[str, Any]):
+    def _process_state_object(self, state_obj: Dict[str, Any], queue_write: bool = True) -> Optional[Tuple[str, str, Optional[float], str]]:
         entity_id = state_obj.get("entity_id")
         if not entity_id or not entity_id.startswith("sensor."):
-            return
+            return None
 
         attributes = state_obj.get("attributes", {})
         friendly_name = attributes.get("friendly_name")
@@ -67,31 +69,66 @@ class HomeAssistantClient:
 
         # 2. Parse timestamp & state
         last_updated = state_obj.get("last_updated") or state_obj.get("last_changed")
-        if not last_updated:
-            last_updated = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        
-        # Ensure standard ISO timestamp format
-        try:
-            dt = datetime.datetime.fromisoformat(last_updated.replace("Z", "+00:00"))
-            ts_str = dt.isoformat()
-        except Exception:
-            ts_str = last_updated
+        now = datetime.datetime.now(datetime.timezone.utc)
+        dt = None
+        if last_updated:
+            try:
+                dt = datetime.datetime.fromisoformat(last_updated.replace("Z", "+00:00"))
+                ts_str = dt.isoformat()
+            except Exception:
+                ts_str = last_updated
+        else:
+            ts_str = now.isoformat()
+
+        # 3. Dormancy check: if sensor hasn't updated in 14+ days, skip history write
+        if dt and (now - dt).days >= config.dormant_days and not queue_write:
+            return None
 
         val_float, raw_val = self._parse_value(state_obj.get("state"))
 
-        # 3. Only store reading if sensor is online & available (has valid numeric value)
+        # 4. Store reading if online & numeric
         if val_float is not None:
-            self.db.insert_reading(
-                entity_id=entity_id,
-                timestamp=ts_str,
-                value=val_float,
-                raw_value=raw_val,
-            )
+            reading = (entity_id, ts_str, val_float, raw_val)
+            if queue_write:
+                try:
+                    self._queue.put_nowait(reading)
+                except asyncio.QueueFull:
+                    pass
+            return reading
+        return None
 
+    async def _batch_flush_worker(self):
+        logger.info(f"Starting async batch flush worker (flush every {config.batch_flush_interval}s or {config.batch_max_size} items)...")
+        while self._running:
+            try:
+                batch: List[Tuple[str, str, Optional[float], str]] = []
+                start_time = asyncio.get_event_loop().time()
+                while len(batch) < config.batch_max_size:
+                    elapsed = asyncio.get_event_loop().time() - start_time
+                    remaining = config.batch_flush_interval - elapsed
+                    if remaining <= 0 and batch:
+                        break
+                    try:
+                        timeout = max(0.1, remaining) if batch else config.batch_flush_interval
+                        item = await asyncio.wait_for(self._queue.get(), timeout=timeout)
+                        batch.append(item)
+                        self._queue.task_done()
+                    except asyncio.TimeoutError:
+                        break
+                
+                if batch:
+                    logger.debug(f"Flushing batch of {len(batch)} sensor readings to database...")
+                    self.db.insert_readings_batch(batch)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in batch flush worker: {e}")
+                await asyncio.sleep(1)
 
     async def start(self):
         self._running = True
         ws_url = self._get_ws_url()
+        self._flush_task = asyncio.create_task(self._batch_flush_worker())
 
         backoff = 2
         while self._running:
@@ -149,9 +186,20 @@ class HomeAssistantClient:
                             if data.get("id") == get_states_id and data.get("success"):
                                 result_states = data.get("result", [])
                                 logger.info(f"Received snapshot of {len(result_states)} states from Home Assistant.")
+                                snapshot_readings = []
                                 for st in result_states:
-                                    self._process_state_object(st)
-                                # Run initial rollups
+                                    reading = self._process_state_object(st, queue_write=False)
+                                    if reading:
+                                        snapshot_readings.append(reading)
+                                    # Yield execution periodically during large snapshot parsing
+                                    if len(snapshot_readings) % 500 == 0:
+                                        await asyncio.sleep(0)
+
+                                if snapshot_readings:
+                                    logger.info(f"Bulk inserting {len(snapshot_readings)} active snapshot sensor readings into database...")
+                                    self.db.insert_readings_batch(snapshot_readings)
+
+                                # Run initial rollups (incremental)
                                 self.db.calculate_rollups()
 
                         elif msg_type == "event":
@@ -159,7 +207,7 @@ class HomeAssistantClient:
                             if event_data.get("event_type") == "state_changed":
                                 new_state = event_data.get("data", {}).get("new_state")
                                 if new_state:
-                                    self._process_state_object(new_state)
+                                    self._process_state_object(new_state, queue_write=True)
 
             except asyncio.CancelledError:
                 logger.info("Home Assistant Client loop cancelled.")
@@ -173,6 +221,9 @@ class HomeAssistantClient:
 
     async def stop(self):
         self._running = False
+        if self._flush_task:
+            self._flush_task.cancel()
+            self._flush_task = None
         if self.ws:
             await self.ws.close()
             self.ws = None

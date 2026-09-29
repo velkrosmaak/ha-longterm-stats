@@ -16,6 +16,9 @@ class AppConfig(BaseModel):
     port: int = Field(default=8080)
     auto_aggregate_interval_minutes: int = Field(default=15)
     prune_raw_days: int = Field(default=0)  # 0 means keep raw data indefinitely
+    dormant_days: int = Field(default=14)    # Days without updates to mark entity dormant
+    batch_flush_interval: int = Field(default=5)  # Seconds between batch writes
+    batch_max_size: int = Field(default=500)      # Max items before flushing queue
     log_level: str = Field(default="INFO")
 
     @classmethod
@@ -42,12 +45,15 @@ class AppConfig(BaseModel):
             "PORT": "port",
             "AUTO_AGGREGATE_INTERVAL_MINUTES": "auto_aggregate_interval_minutes",
             "PRUNE_RAW_DAYS": "prune_raw_days",
+            "DORMANT_DAYS": "dormant_days",
+            "BATCH_FLUSH_INTERVAL": "batch_flush_interval",
+            "BATCH_MAX_SIZE": "batch_max_size",
             "LOG_LEVEL": "log_level",
         }
         for env_key, model_key in env_mappings.items():
             val = os.getenv(env_key)
             if val is not None:
-                if model_key in ("port", "auto_aggregate_interval_minutes", "prune_raw_days"):
+                if model_key in ("port", "auto_aggregate_interval_minutes", "prune_raw_days", "dormant_days", "batch_flush_interval", "batch_max_size"):
                     try:
                         config_data[model_key] = int(val)
                     except ValueError:
@@ -56,5 +62,6 @@ class AppConfig(BaseModel):
                     config_data[model_key] = val
 
         return cls(**config_data)
+
 
 config = AppConfig.load()

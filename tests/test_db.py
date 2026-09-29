@@ -67,6 +67,28 @@ def test_static_sensor_detection(temp_db):
     assert len(static_only) == 1
     assert static_only[0]["entity_id"] == "sensor.constant"
 
+def test_dormant_sensor_detection(temp_db):
+    temp_db.upsert_entity("sensor.active", "Active Sensor")
+    
+    # Insert old entity with last_seen 20 days ago
+    old_time = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=20)).isoformat()
+    with temp_db.get_connection() as conn:
+        conn.execute("INSERT INTO entities (entity_id, friendly_name, enabled, last_seen) VALUES (?, ?, 1, ?)", ("sensor.old", "Old Sensor", old_time))
+        conn.commit()
+
+    entities = temp_db.get_entities(dormant_days=14)
+    old_ent = [e for e in entities if e["entity_id"] == "sensor.old"][0]
+    act_ent = [e for e in entities if e["entity_id"] == "sensor.active"][0]
+
+    assert old_ent["is_dormant"] is True
+    assert act_ent["is_dormant"] is False
+
+    # Test filtering out dormant
+    active_only = temp_db.get_entities(dormant_days=14, include_dormant=False)
+    assert len(active_only) == 1
+    assert active_only[0]["entity_id"] == "sensor.active"
+
+
 
 
 def test_sensor_readings_and_rollups(temp_db):

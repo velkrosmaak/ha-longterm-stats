@@ -123,7 +123,9 @@
                     <button onclick="setCategory('power')" class="category-pill px-2.5 py-1 rounded-md bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700 whitespace-nowrap">🔌 Power</button>
                     <button onclick="setCategory('battery')" class="category-pill px-2.5 py-1 rounded-md bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700 whitespace-nowrap">🔋 Battery</button>
                     <button onclick="setCategory('static')" class="category-pill px-2.5 py-1 rounded-md bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700 whitespace-nowrap">📌 Static</button>
+                    <button onclick="setCategory('dormant')" class="category-pill px-2.5 py-1 rounded-md bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700 whitespace-nowrap">💤 Dormant</button>
                 </div>
+
 
             </div>
 
@@ -410,7 +412,10 @@
             
             const filtered = allSensors.filter(s => {
                 const matchesSearch = s.entity_id.toLowerCase().includes(search) || (s.friendly_name && s.friendly_name.toLowerCase().includes(search));
-                const matchesCategory = !activeCategory || (activeCategory === 'static' ? s.is_static === true : s.device_class === activeCategory);
+                const matchesCategory = !activeCategory || 
+                                        (activeCategory === 'static' ? s.is_static === true : 
+                                         activeCategory === 'dormant' ? s.is_dormant === true : 
+                                         s.device_class === activeCategory);
                 return matchesSearch && matchesCategory;
             });
 
@@ -427,12 +432,13 @@
                 const unit = s.unit_of_measurement ? `<span class="text-[10px] text-slate-400 font-mono ml-1">${s.unit_of_measurement}</span>` : '';
                 const lastUpdatedTime = s.last_seen ? formatTimeAgo(s.last_seen) : '';
                 const staticIcon = s.is_static ? `<span class="text-amber-400 text-xs shrink-0" title="Static Value: Sensor only ever reports a constant value">📌</span>` : '';
+                const dormantIcon = s.is_dormant ? `<span class="text-slate-500 text-xs shrink-0" title="Dormant Sensor: No state updates received in 14+ days">💤</span>` : '';
 
                 return `
                     <div onclick="toggleSelectSensor('${s.entity_id}', event)" 
                          class="p-2.5 rounded-xl cursor-pointer transition flex items-center justify-between border ${isSelected ? 'bg-sky-500/10 border-sky-500/30 text-sky-300' : 'bg-slate-900/40 border-slate-800/60 hover:bg-slate-800/60 text-slate-300'}">
                         <div class="flex items-center space-x-2.5 min-w-0 flex-1">
-                            <span class="text-base shrink-0 flex items-center gap-1">${icon}${staticIcon}</span>
+                            <span class="text-base shrink-0 flex items-center gap-1">${icon}${staticIcon}${dormantIcon}</span>
                             <div class="truncate min-w-0 flex-1">
                                 <div class="text-xs font-medium truncate flex items-center justify-between gap-1">
                                     <span class="truncate">${s.friendly_name || s.entity_id}</span>
@@ -447,6 +453,7 @@
                     </div>
                 `;
             }).join('');
+
 
 
             document.getElementById('selected-count').innerText = `${selectedSensorIds.length} selected`;

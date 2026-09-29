@@ -57,11 +57,22 @@ async def get_sensors(
     enabled_only: bool = Query(False),
     device_class: Optional[str] = Query(None),
     sort_by: Optional[str] = Query("name", description="name, last_updated_desc, last_updated_asc"),
-    is_static: Optional[bool] = Query(None, description="Filter for static value sensors (true/false)")
+    is_static: Optional[bool] = Query(None, description="Filter for static value sensors (true/false)"),
+    include_dormant: bool = Query(True, description="Include dormant sensors (not updated in 14+ days)"),
+    is_dormant: Optional[bool] = Query(None, description="Filter explicitly for dormant sensors (true/false)")
 ):
     if not db:
         raise HTTPException(status_code=500, detail="Database not initialized")
-    return db.get_entities(enabled_only=enabled_only, device_class=device_class, sort_by=sort_by, is_static_filter=is_static)
+    return db.get_entities(
+        enabled_only=enabled_only,
+        device_class=device_class,
+        sort_by=sort_by,
+        is_static_filter=is_static,
+        dormant_days=config.dormant_days,
+        include_dormant=include_dormant,
+        is_dormant_filter=is_dormant
+    )
+
 
 
 

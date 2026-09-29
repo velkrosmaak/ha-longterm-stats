@@ -19,9 +19,12 @@ class Database:
     def get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
-        # Enable WAL mode for performance & concurrent reads
+        # Enable WAL mode & PRAGMA optimizations for VM memory/disk performance
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA cache_size=-64000;")  # 64 MB memory cache
+        conn.execute("PRAGMA temp_store=MEMORY;")
+        conn.execute("PRAGMA mmap_size=268435456;") # 256 MB memory-mapped I/O
         return conn
 
     def init_db(self):
@@ -86,6 +89,14 @@ class Database:
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_entity_date ON daily_stats(entity_id, bucket_date);")
 
+            # 5. Rollup Watermark Tracker
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS rollup_watermarks (
+                watermark_key TEXT PRIMARY KEY,
+                last_processed_time TEXT NOT NULL
+            );
+            """)
+
             conn.commit()
 
     def upsert_entity(
@@ -134,14 +145,20 @@ class Database:
             """, readings)
             conn.commit()
 
-    def calculate_rollups(self):
-        """Computes hourly and daily rollup statistics from raw data."""
+    def calculate_rollups(self, force_full: bool = False):
+        """Computes incremental hourly and daily rollup statistics from raw data."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
-            # 1. Hourly Rollup
-            # Group raw readings by entity_id and SUBSTR(timestamp, 1, 13) || ':00:00' (YYYY-MM-DDTHH:00:00)
-            cursor.execute("""
+            # Fetch last hourly watermark
+            last_hourly = None
+            if not force_full:
+                row_h = cursor.execute("SELECT last_processed_time FROM rollup_watermarks WHERE watermark_key = 'hourly'").fetchone()
+                if row_h:
+                    last_hourly = row_h["last_processed_time"]
+
+            # 1. Hourly Rollup (Incremental)
+            query_hourly = """
             INSERT INTO hourly_stats (entity_id, bucket_time, min_val, max_val, avg_val, sum_val, count_val)
             SELECT 
                 entity_id,
@@ -153,6 +170,13 @@ class Database:
                 COUNT(value) as count_val
             FROM sensor_data
             WHERE value IS NOT NULL
+            """
+            params_h = []
+            if last_hourly:
+                query_hourly += " AND timestamp >= ?"
+                params_h.append(last_hourly)
+
+            query_hourly += """
             GROUP BY entity_id, bucket_time
             ON CONFLICT(entity_id, bucket_time) DO UPDATE SET
                 min_val = excluded.min_val,
@@ -160,11 +184,27 @@ class Database:
                 avg_val = excluded.avg_val,
                 sum_val = excluded.sum_val,
                 count_val = excluded.count_val;
-            """)
+            """
+            cursor.execute(query_hourly, params_h)
 
-            # 2. Daily Rollup
-            # Group hourly stats by entity_id and SUBSTR(bucket_time, 1, 10) (YYYY-MM-DD)
-            cursor.execute("""
+            # Update hourly watermark
+            max_h = cursor.execute("SELECT MAX(bucket_time) as max_b FROM hourly_stats").fetchone()
+            if max_h and max_h["max_b"]:
+                cursor.execute("""
+                INSERT INTO rollup_watermarks (watermark_key, last_processed_time)
+                VALUES ('hourly', ?)
+                ON CONFLICT(watermark_key) DO UPDATE SET last_processed_time = excluded.last_processed_time;
+                """, (max_h["max_b"],))
+
+            # Fetch last daily watermark
+            last_daily = None
+            if not force_full:
+                row_d = cursor.execute("SELECT last_processed_time FROM rollup_watermarks WHERE watermark_key = 'daily'").fetchone()
+                if row_d:
+                    last_daily = row_d["last_processed_time"]
+
+            # 2. Daily Rollup (Incremental)
+            query_daily = """
             INSERT INTO daily_stats (entity_id, bucket_date, min_val, max_val, avg_val, sum_val, count_val)
             SELECT 
                 entity_id,
@@ -175,6 +215,13 @@ class Database:
                 SUM(sum_val) as sum_val,
                 SUM(count_val) as count_val
             FROM hourly_stats
+            """
+            params_d = []
+            if last_daily:
+                query_daily += " WHERE bucket_time >= ?"
+                params_d.append(last_daily)
+
+            query_daily += """
             GROUP BY entity_id, bucket_date
             ON CONFLICT(entity_id, bucket_date) DO UPDATE SET
                 min_val = excluded.min_val,
@@ -182,7 +229,17 @@ class Database:
                 avg_val = excluded.avg_val,
                 sum_val = excluded.sum_val,
                 count_val = excluded.count_val;
-            """)
+            """
+            cursor.execute(query_daily, params_d)
+
+            # Update daily watermark
+            max_d = cursor.execute("SELECT MAX(bucket_date) as max_b FROM daily_stats").fetchone()
+            if max_d and max_d["max_b"]:
+                cursor.execute("""
+                INSERT INTO rollup_watermarks (watermark_key, last_processed_time)
+                VALUES ('daily', ?)
+                ON CONFLICT(watermark_key) DO UPDATE SET last_processed_time = excluded.last_processed_time;
+                """, (max_d["max_b"],))
 
             conn.commit()
 
@@ -199,8 +256,14 @@ class Database:
         enabled_only: bool = False,
         device_class: Optional[str] = None,
         sort_by: Optional[str] = "name",
-        is_static_filter: Optional[bool] = None
+        is_static_filter: Optional[bool] = None,
+        dormant_days: int = 14,
+        include_dormant: bool = True,
+        is_dormant_filter: Optional[bool] = None
     ) -> List[Dict[str, Any]]:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        dormant_cutoff = (now - datetime.timedelta(days=dormant_days)).isoformat()
+
         with self.get_connection() as conn:
             query = """
             SELECT 
@@ -242,10 +305,21 @@ class Database:
             for r in rows:
                 d = dict(r)
                 d["is_static"] = bool(d["is_static"])
+                
+                # Check dormancy (last_seen < 14 days ago)
+                last_seen = d.get("last_seen")
+                d["is_dormant"] = bool(last_seen and last_seen < dormant_cutoff)
+
                 if is_static_filter is not None and d["is_static"] != is_static_filter:
                     continue
+                if is_dormant_filter is not None and d["is_dormant"] != is_dormant_filter:
+                    continue
+                if not include_dormant and d["is_dormant"]:
+                    continue
+
                 result.append(d)
             return result
+
 
 
 
