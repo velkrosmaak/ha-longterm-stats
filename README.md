@@ -84,6 +84,36 @@ PYTHONPATH=. python main.py
 
 ---
 
+## Deployment as a Systemd Service (Auto-Start on Boot)
+
+On Linux / Ubuntu VMs, set up the service to start automatically on boot:
+
+```bash
+./install.sh
+```
+
+Manage the running service:
+
+```bash
+# Check service status
+sudo systemctl status ha-longterm-stats
+
+# View live logs
+sudo journalctl -u ha-longterm-stats -f
+
+# Restart / Stop service
+sudo systemctl restart ha-longterm-stats
+sudo systemctl stop ha-longterm-stats
+```
+
+To remove the service:
+
+```bash
+./uninstall.sh
+```
+
+---
+
 ## Deployment with Docker
 
 Run using `docker-compose`:
@@ -91,6 +121,7 @@ Run using `docker-compose`:
 ```bash
 docker-compose up -d
 ```
+
 
 ---
 
